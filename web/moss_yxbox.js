@@ -9162,12 +9162,31 @@ app.registerExtension({
     const originalCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const result = originalCreated?.apply(this, arguments);
-      try {
-        setup(this);
-      } catch (error) {
-        console.error("[MOSS YXBOX] 初始化失败", error);
-      }
+      runSetupSafely(this);
       return result;
     };
   },
 });
+
+// setup() 里 `const state = (node.__yxbox = {...})` 在第二行，而入口守卫是
+// `if (node.__yxbox) return;` —— 只要 setup() 途中抛一次，这个节点就被半成品状态
+// 永久占住，之后再怎么触发都直接 return（只剩原始参数控件、DOM 界面不再创建、
+// 「背景图N」接口也不会回收），只能把节点删掉重建。
+// 所以：失败时必须回滚状态，并给一次重试（多数失败只是 DOM 还没挂好）。
+function runSetupSafely(node) {
+  if (!node) return;
+  try {
+    setup(node);
+  } catch (error) {
+    try {
+      delete node.__yxbox;
+    } catch (_error) {
+      node.__yxbox = undefined;
+    }
+    console.error("[MOSS YXBOX] 初始化失败（已回滚状态，可重试）", error);
+    if (!node.__yxboxRetry) {
+      node.__yxboxRetry = true;
+      setTimeout(() => runSetupSafely(node), 120);
+    }
+  }
+}
