@@ -4236,11 +4236,20 @@ function setup(node) {
 
   // 上方那些原生参数控件大约占多高（兜底估算，测不到 offsetTop 时用）
   // proseMode：'actual' 用当前描述框高度；'auto' 用文字需要的高度；'min' 用最小高度
+  // 新版前端排版控件只看 options.hidden；而「连了线的参数控件」会被核心单独标成
+  // hidden=true 却仍然占 24px。判据用错会让这里的估算比真实排版少整一行。
+  const widgetLayoutHidden = (item) => {
+    const options = item?.options || {};
+    return options.hidden === true || options.hidden === "hidden";
+  };
+
+  // 上方那些原生参数控件大约占多高（兜底估算，量不到真实 y 时用）
+  // proseMode：'actual' 用当前描述框高度；'auto' 用文字需要的高度；'min' 用最小高度
   const widgetStackHeight = (proseMode = "actual") => {
     let sum = 0;
     for (const item of node.widgets || []) {
       if (state.domWidget && item === state.domWidget) continue;
-      if (item.hidden) continue;
+      if (widgetLayoutHidden(item)) continue;
       // 「整体描述」的高度单独控制
       if (proseWidget && item === proseWidget) {
         sum += proseMode === "min" ? PROSE_MIN : proseMode === "auto" ? proseAutoPx : proseHeight();
@@ -4265,10 +4274,16 @@ function setup(node) {
   // DOM 控件在整个节点里的起始高度。
   // 一律用「各控件自然高度之和」估算：直接量 offsetTop 会被挤压后的布局带偏，
   // 反而形成「量到得越矮→节点越矮→挤得越狠」的死循环。
-  const nativeTop = () => widgetStackHeight() + 46;
+  // DOM 控件在整个节点里的起始高度：优先用前端真正排好的 y（最准，也能自适应标题栏 /
+  // 参数区 / 输入桩的高度），量不到才退回「各控件自然高度之和 + 46」的老估算。
+  const nativeTop = () => {
+    const y = Math.round(Number(state.domWidget?.y) || 0);
+    if (y > 0) return y;
+    return Math.round(widgetStackHeight() + 46);
+  };
   // 「刚好够用」的节点高度：只算基础高度（不含拉长节点多给画布的那部分），
   // 否则每次载入都会把节点又撑高一点点
-  const baseNodeHeight = () => Math.round(widgetStackHeight("auto") + 46 + baseTotalHeight() + 14);
+  const baseNodeHeight = () => Math.round(nativeTop() + domDesiredHeight() + 14);
   const neededNodeHeight = () => baseNodeHeight();
 
   let fitPending = false;
