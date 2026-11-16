@@ -8,6 +8,8 @@ const TYPE_CHAR = "角色框";
 const TYPES = [TYPE_OBJ, TYPE_TEXT, TYPE_CHAR];
 const TYPE_COLOR = { [TYPE_OBJ]: "#4ea1ff", [TYPE_TEXT]: "#ffd166", [TYPE_CHAR]: "#3ddc97" };
 const BG_COLOR = "#ffb454";
+// 选中框「额外高亮描边」的颜色：比类型色更亮，和画布上的连线高亮同色系
+const SELECT_HIGHLIGHT = "#4cc2ff";
 
 const GRID = 16;
 const HANDLE_TOL = 7;
@@ -4604,6 +4606,15 @@ function setup(node) {
       const bwid = Math.max(1, box.w * g.scale);
       const bhei = Math.max(1, box.h * g.scale);
       ctx.save();
+      // 选中框额外的高亮描边：先在外扩 2px 处画一圈亮色（带轻微辉光），
+      // 再把本体类型色描边压在上面 —— 一眼就能看出当前选中的是哪个框。
+      ctx.save();
+      ctx.strokeStyle = SELECT_HIGHLIGHT;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = SELECT_HIGHLIGHT;
+      ctx.shadowBlur = 8;
+      ctx.strokeRect(bx - 2, by - 2, Math.max(1, bwid + 4), Math.max(1, bhei + 4));
+      ctx.restore();
       ctx.strokeStyle = itemColor(box);
       ctx.lineWidth = 2;
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.max(1, bwid - 1), Math.max(1, bhei - 1));
