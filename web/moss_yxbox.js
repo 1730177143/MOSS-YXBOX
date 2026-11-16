@@ -652,12 +652,15 @@ function setup(node) {
   // 即使已从 inputs 摘掉，槽位区仍按 66 个算 → 凭空多出约 1200px，节点被撑到 3134 高、
   // DOM 界面被挤到最底下（看着就像「界面不见了、只剩一大片空白」）。
   // 所以改完输入必须让前端重建槽位并重排一次。
+  // 槽位变了之后节点需要重新量一次尺寸：把「按 66 个输入桩算出来的死白」收回来
+  let refitNode = null;
   const resyncSlots = () => {
     try {
       if (typeof node._setConcreteSlots === "function") node._setConcreteSlots();
       node._widgetSlotsDirty = true;
       delete node.widgets_start_y;
       if (typeof node.arrange === "function") node.arrange();
+      if (refitNode) setTimeout(refitNode, 0);
       node.graph?.setDirtyCanvas?.(true, true);
     } catch (_error) {
       // 前端内部接口变了就忽略：最坏只是节点高度偏大，不影响使用
@@ -4344,6 +4347,7 @@ function setup(node) {
     }
   };
 
+  refitNode = fitNodeInitial;   // 槽位更新后由 resyncSlots() 触发一次重新量尺寸
   const layout = () => {
     // 画布宽高的数字控件可能晚于这里才挂到 DOM 上（2.0 还会重建输入框），
     // 每次布局都强制重写一遍箭头步长，保证「倍数改了箭头立刻按新步长走」
