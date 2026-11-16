@@ -647,6 +647,22 @@ function setup(node) {
       return false;
     }
   };
+  // 新版前端的 node.removeInput()/addInput() 只改 node.inputs，内部缓存 _concreteInputs
+  // 不会跟着变，而排版高度是按 _concreteInputs 量的：老工作流里 64 个废弃的「背景图N」
+  // 即使已从 inputs 摘掉，槽位区仍按 66 个算 → 凭空多出约 1200px，节点被撑到 3134 高、
+  // DOM 界面被挤到最底下（看着就像「界面不见了、只剩一大片空白」）。
+  // 所以改完输入必须让前端重建槽位并重排一次。
+  const resyncSlots = () => {
+    try {
+      if (typeof node._setConcreteSlots === "function") node._setConcreteSlots();
+      node._widgetSlotsDirty = true;
+      delete node.widgets_start_y;
+      if (typeof node.arrange === "function") node.arrange();
+      node.graph?.setDirtyCanvas?.(true, true);
+    } catch (_error) {
+      // 前端内部接口变了就忽略：最坏只是节点高度偏大，不影响使用
+    }
+  };
   let stripTries = 0;
   const stripHiddenInputs = () => {
     if (stripTries >= 8 || vueNodesEnabled()) return;
@@ -666,6 +682,7 @@ function setup(node) {
     }
     if (removed) {
       stripTries += 1;
+      resyncSlots();
       node.setDirtyCanvas?.(true, true);
       node.graph?.setDirtyCanvas?.(true, true);
     }
@@ -5579,10 +5596,12 @@ function setup(node) {
       if (!slot || slot.link == null) break;
       connected += 1;
     }
+    let changed = false;
     if (connected < MAX_BG) {
       const name = bgSlotName(connected);
       if (!bgInputs.some((item) => item.name === name)) {
         node.addInput(name, "IMAGE");
+        changed = true;
       }
     }
     // 删掉多出来的空位（只保留一个空位）
@@ -5591,9 +5610,13 @@ function setup(node) {
       if (index < 0) continue;
       if (index > connected && slot.link == null) {
         const at = node.inputs.indexOf(slot);
-        if (at >= 0) node.removeInput(at);
+        if (at >= 0) {
+          node.removeInput(at);
+          changed = true;
+        }
       }
     }
+    if (changed) resyncSlots();
   };
 
   const imageURL = (info) => {
