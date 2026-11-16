@@ -4894,7 +4894,8 @@ function setup(node) {
     const h = Math.max(1, box.h * g.scale);
     const color = itemColor(box);
     // 选中态由覆盖层实时画（放大不糊），内容层只画非选中样式
-    const selected = S.selected.has(box) && !g.scene;
+    const isSelected = S.selected.has(box);
+    const selected = isSelected && !g.scene;
 
     if (box.hidden) {
       c.save();
@@ -4928,7 +4929,10 @@ function setup(node) {
       c.beginPath();
       c.rect(x + 2, y + tagH + 2, Math.max(1, w - 4), Math.max(1, h - tagH - 6));
       c.clip();
-      c.fillStyle = "rgba(240,240,245,0.92)";
+      // 有框被选中时，其它框的文字压到几乎和底色同色 —— 视线只留在选中的那个框上
+      c.fillStyle = (!isSelected && S.boxes.some((item) => item && S.selected.has(item)))
+        ? "rgba(240,240,245,0.10)"
+        : "rgba(240,240,245,0.92)";
       c.font = `${fontSize}px system-ui, sans-serif`;
       c.textBaseline = "top";
       // 从编号牌子下沿再留 4px 开始排，避免牌子变大后把第一行文字的上半截裁掉
