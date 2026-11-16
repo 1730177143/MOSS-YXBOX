@@ -2334,6 +2334,8 @@ function setup(node) {
   };
 
   const geo = () => {
+    // 画背板时临时锁定成「100%、不平移」的基准几何（见 present()）
+    if (state.geoLock) return state.geoLock;
     const rect = canvas.getBoundingClientRect();
     // 布局像素尺寸（不受工作流缩放影响）
     const cw = Math.max(1, canvas.clientWidth || rect.width || 1);
@@ -4414,24 +4416,83 @@ function setup(node) {
   };
 
   // ---------------------------------------------------------------- drawing
+  // 内容层（底图 + 所有框 + 网格/参考线/编号牌）画进一张「背板」位图：
+  //   背板尺寸固定成「布局像素 × dpr」，和 ComfyUI 视图缩放、画布内缩放都无关
+  //   → 滚轮再怎么转也不会重新分配位图、不会把底图和所有框重画一遍。
+  //   只有内容真的变了才重画背板；缩放/平移只是把同一张位图拉伸贴回屏幕。
+  //   选中描边与控制点由覆盖层实时画，放大也清晰。
+  let sceneCanvas = null;
+  let sceneCtx = null;
+  let sceneDirty = true;
+
   function paint() {
+    sceneDirty = true;
+    present();
+  }
+
+  // 纯视图变化（画布内滚轮缩放 / 平移）：不重画内容层，只重新贴图
+  function paintView() {
+    present();
+  }
+
+  function present() {
     if (!ctx) return;
     const g = geo();
     const dpr = window.devicePixelRatio || 1;
-    // 背板分辨率按「视觉像素」给足（工作流放大时也清晰），但绘制坐标系统一用布局像素，
-    // 于是 q = 背板像素 / 布局像素；上限 4096 防止放大过头把显存打爆。
-    const k = g.k || 1;
-    const rawW = g.cw * k * dpr;
-    const rawH = g.ch * k * dpr;
-    const cap = 4096;
-    const shrink = Math.min(1, cap / Math.max(rawW, rawH));
-    const bw = Math.max(1, Math.round(rawW * shrink));
-    const bh = Math.max(1, Math.round(rawH * shrink));
+    const bw = Math.max(1, Math.round(g.cw * dpr));
+    const bh = Math.max(1, Math.round(g.ch * dpr));
     if (canvas.width !== bw || canvas.height !== bh) {
       canvas.width = bw;
       canvas.height = bh;
+      sceneDirty = true;
     }
-    const q = bw / g.cw || dpr;
+    if (!sceneCanvas) {
+      sceneCanvas = document.createElement("canvas");
+      sceneCtx = sceneCanvas.getContext("2d");
+    }
+    if (sceneCtx && (sceneCanvas.width !== bw || sceneCanvas.height !== bh)) {
+      sceneCanvas.width = bw;
+      sceneCanvas.height = bh;
+      sceneDirty = true;
+    }
+    const ox0 = (g.cw - S.width * g.fit) / 2;
+    const oy0 = (g.ch - S.height * g.fit) / 2;
+    if (sceneDirty) {
+      // 用「100%、不平移」的基准几何把内容画一遍，再整块拷进背板
+      state.geoLock = { ...g, scale: g.fit, ox: ox0, oy: oy0, scene: true };
+      try {
+        drawSceneBody();
+        if (sceneCtx) {
+          sceneCtx.setTransform(1, 0, 0, 1, 0, 0);
+          sceneCtx.clearRect(0, 0, bw, bh);
+          sceneCtx.drawImage(canvas, 0, 0);
+        }
+      } catch (error) {
+        console.error("[MOSS YXBOX] 画布绘制失败", error);
+      } finally {
+        state.geoLock = null;
+        sceneDirty = false;
+      }
+    }
+    // 背板 → 屏幕：一次等比拉伸贴图，不重新绘制任何内容
+    const z = g.fit > 0 ? g.scale / g.fit : 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, bw, bh);
+    if (sceneCtx) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (g.ox - ox0 * z), dpr * (g.oy - oy0 * z));
+      ctx.drawImage(sceneCanvas, 0, 0, bw, bh, 0, 0, g.cw, g.ch);
+    }
+    // 覆盖层按当前缩放实时画（选中框 / 控制点 / 画布边框 / 状态栏）
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawOverlay(g);
+  }
+
+  // 内容层：底图 / 框 / 参考线 / 网格 / 编号牌（只按基准几何画一次）
+  function drawSceneBody() {
+    const g = geo();
+    const q = window.devicePixelRatio || 1;
     ctx.setTransform(q, 0, 0, q, 0, 0);
     ctx.clearRect(0, 0, g.cw, g.ch);
 
@@ -4486,9 +4547,18 @@ function setup(node) {
       drawBox(ctx, S.boxes[i], i, g, left, top);
     }
 
+    ctx.restore();
+  }
+
+  // 覆盖层：选中描边 / 控制点 / 画布外框（跟着当前缩放实时画，放大不糊）
+  function drawOverlay(g) {
+    const left = g.ox;
+    const top = g.oy;
+    const cw = S.width * g.scale;
+    const chh = S.height * g.scale;
     // 选中的背景图描边（背景图在框下面，选中框仍然画在最上面）
-    for (const bg of bgs) {
-      if (!S.selected.has(bg) || bg.hidden) continue;
+    for (const bg of S.bgs) {
+      if (!bg || !S.selected.has(bg) || bg.hidden) continue;
       const bx = left + bg.x * g.scale;
       const by = top + bg.y * g.scale;
       const bwid = bg.w * g.scale;
@@ -4501,14 +4571,24 @@ function setup(node) {
       ctx.restore();
       drawHandles(ctx, bg, g, left, top);
     }
-
-    ctx.restore();
-
+    // 选中的框：描边 + 控制点（内容层里跳过了选中态，见 drawBox）
+    for (const box of S.boxes) {
+      if (!box || box.hidden || !S.selected.has(box)) continue;
+      const bx = left + box.x * g.scale;
+      const by = top + box.y * g.scale;
+      const bwid = Math.max(1, box.w * g.scale);
+      const bhei = Math.max(1, box.h * g.scale);
+      ctx.save();
+      ctx.strokeStyle = itemColor(box);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx + 0.5, by + 0.5, Math.max(1, bwid - 1), Math.max(1, bhei - 1));
+      ctx.restore();
+      drawHandles(ctx, box, g, left, top);
+    }
     // 画布边框
     ctx.strokeStyle = "rgba(255,255,255,0.16)";
     ctx.lineWidth = 1;
     ctx.strokeRect(left + 0.5, top + 0.5, cw - 1, chh - 1);
-
     // 底部状态栏跟着画布一起刷新（内部有字符串比较，重复调用不写 DOM）
     state.updateStatus?.();
   }
@@ -4537,7 +4617,8 @@ function setup(node) {
   // 画布上的编号小牌子（框用 01、02…，背景图用 B1、B2…）。
   // 字号只跟「画布缩放」走：滚轮放大画布时牌子跟着变大；工作流整体缩放不影响它（那样会越小越糊）。
   function drawTag(c, text, px, py, color) {
-    const zoom = Math.max(1, Number(state.zoom) || 1);
+    // 背板按 100% 基准画一次、缩放时整张位图一起拉伸，所以这里固定按 1 算
+    const zoom = Math.max(1, Number(state.geoLock ? 1 : state.zoom || 1) || 1);
     const fs = Math.round(clamp(14 * zoom, 14, 64));
     const pad = Math.round(fs * 0.38);
     c.save();
@@ -4775,7 +4856,8 @@ function setup(node) {
     const w = Math.max(1, box.w * g.scale);
     const h = Math.max(1, box.h * g.scale);
     const color = itemColor(box);
-    const selected = S.selected.has(box);
+    // 选中态由覆盖层实时画（放大不糊），内容层只画非选中样式
+    const selected = S.selected.has(box) && !g.scene;
 
     if (box.hidden) {
       c.save();
@@ -5325,7 +5407,7 @@ function setup(node) {
       state.panX = pan.px + dx;
       state.panY = pan.py + dy;
       canvas.style.cursor = "grabbing";
-      paint();
+      paintView();
       syncZoomBadge();
       return;
     }
@@ -5418,7 +5500,7 @@ function setup(node) {
       state.zoom = 1;
       state.panX = 0;
       state.panY = 0;
-      paint();
+      paintView();
       syncZoomBadge();
       return;
     }
@@ -5426,7 +5508,7 @@ function setup(node) {
     const limit = Math.max(g.cw, g.ch) * 2;
     state.panX = clamp(px - cx * scale - (g.cw - S.width * scale) / 2, -limit, limit);
     state.panY = clamp(py - cy * scale - (g.ch - S.height * scale) / 2, -limit, limit);
-    paint();
+    paintView();
     syncZoomBadge();
   };
 
