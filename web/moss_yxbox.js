@@ -4116,7 +4116,19 @@ function setup(node) {
 
   // 整块 DOM 界面需要的高度 = 顶部按钮行 + 工具条 + 画布 + 列表（全部是定值，杜绝互相拉扯）
   // chrome 只量顶部两条小按钮行（它们的高度只由文字决定，跟画布/列表无关，量了也不会回路）
+  // .dom-widget 容器在第一帧还是 position:fixed + 0×0，此时 root 只有 padding+border 的 16px 宽。
+  // 宽度没排好时量到的行高全是「每条按钮各占一行」的假数据，任何尺寸推算都必须先等它。
+  const domWidthReady = () => {
+    try {
+      return Math.round(Number(root?.clientWidth) || 0) >= 240;
+    } catch (_error) {
+      return false;
+    }
+  };
+
   const chromeHeight = () => {
+    // 还没排版好就按经验值，绝不把折行后的巨大行高写进节点高度
+    if (!domWidthReady()) return 92;
     const heights = [];
     try {
       for (const item of [topBar, head, toolsRow, tableBar, statusBar]) heights.push(Number(item?.offsetHeight) || 0);
@@ -4124,8 +4136,10 @@ function setup(node) {
       // 忽略
     }
     const measured = heights.reduce((sum, value) => sum + value, 0);
-    // 量不到（还没挂到 DOM）时按经验值；量到就把间距/内边距一并加足
-    return Math.round(measured > 20 ? measured + 38 : 92);
+    // 正常 90~200px。超过 400 只可能是「父容器还是 0 宽 → 按钮每行只放一个」的假数据，
+    // 那个值会把节点一次性撑成两倍高，而核心的 _arrangeWidgets 只涨不缩 → 死白永久留下。
+    if (!(measured > 20) || measured > 400) return 92;
+    return Math.round(measured + 38);
   };
 
   // 「显示行数」档时整块界面的高度 —— 也是节点能缩到的最小高度
@@ -4267,6 +4281,15 @@ function setup(node) {
   // 已经存过自定义尺寸就保持原样——你调过的尺寸下次打开还在
   const fitNodeInitial = () => {
     if (!node.setSize) return;
+    // 第一帧 .dom-widget 还是 0×0：等真的排好版（宽度 > 0）再定尺寸，
+    // 否则量到的是「每条按钮各占一行」的假高度，节点会被一次性撑成两倍高。
+    if (!domWidthReady()) {
+      const retry = (state.fitRetry || 0) + 1;
+      state.fitRetry = retry;
+      if (retry <= 40) requestAnimationFrame(fitNodeInitial);
+      return;
+    }
+    state.fitRetry = 0;
     const need = Math.round(neededNodeHeight());
     const current = node.size || [980, need];
     const width0 = Math.round(current[0] || 0);
@@ -4275,9 +4298,15 @@ function setup(node) {
     // 宽度：初次加载就保证列表整行能完整露出来（列多、窄了会把右边的按钮挤掉），
     // 用户此前存过更窄的尺寸也先撑到最小可视宽度，之后再自己拉宽/压窄都随你
     const width = Math.max(980, requiredNodeWidth(), width0 || 980);
-    const height = isDefault ? Math.max(need, 560) : height0;
+    // 旧版会把节点撑成两倍高（第一帧量到了未排版的行高），存下来的高度就带着一大块死白。
+    // 有明显死白（比「参数区 + DOM 界面」还高出 400px 以上）时收回到刚好够用；
+    // 正常手动拖大的尺寸差不到这个量级，不受影响。
+    const contentBottom = Math.round(nativeTop() + Math.min(domDesiredHeight(), 4000));
+    const bloated = height0 > need + 480 && height0 - contentBottom > 400;
+    const height = isDefault || bloated ? Math.max(need, 560) : height0;
     if (width !== width0 || height !== height0) {
       node.setSize([width, height]);
+      state.appliedH = Math.round(height);
     }
   };
 
@@ -9018,7 +9047,10 @@ function setup(node) {
     minWidth: 0,
   });
   domWidget.computeSize = function (width) {
-    return [Math.max(360, width || 520), Math.min(domDesiredHeight(), 1600)];
+    // 别在这里硬顶 1600：老代码会被「第一帧量错的界面高度」顶到上限，核心就照这个值
+    // 把节点撑长，而核心的 _arrangeWidgets 只涨不缩 —— 空白就永久留下了。
+    // 上限与 computeLayoutSize 的 maxHeight 保持一致。
+    return [Math.max(360, width || 520), Math.min(domDesiredHeight(), 4000)];
   };
 
   ensureBgInputs();
