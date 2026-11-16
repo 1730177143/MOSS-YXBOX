@@ -511,9 +511,9 @@ function setup(node) {
     // （旧版存在 yxShowRows 里的那个统一值已经不用了）
     bgShowRows: readRows(node.properties?.yxBgRows),
     boxShowRows: readRows(node.properties?.yxBoxRows),
-    // 画布区显示高度：0 = 自动（老算法），>0 = 用这个固定值
-    // v1.0.4 起默认 600：没存过这个值（老工作流 / 新节点）也按 600 显示，存了 0 才是「要自动」
-    stageH: clamp(Math.round(Number(node.properties?.yxStageH ?? 600) || 0), 0, 2600),
+    // 画布区显示高度：0 = 自动（按画布长宽比铺满当前宽度，也就是「图的大小」），>0 = 固定值
+    // 从这一版起默认自动：不再默认塞进 600px 的矮框
+    stageH: clamp(Math.round(Number(node.properties?.yxStageH ?? 0) || 0), 0, 2600),
     // 「导入原图」接口上次导入过的图地址，用来避免每帧重复导入
     imageImportSource: "",
     imageImportOk: false,
@@ -1326,7 +1326,7 @@ function setup(node) {
   // 画布区高度（方案 A）：填了就按这个高度显示画布区，留空则按窗口预算 + 画布长宽比自动算。
   // 默认留空，所以初始高度和以前完全一样；值存在节点里，跨会话保留。
   const stageHField = el("label", "yx-rows-field");
-  stageHField.title = "画布区（绘图区）的显示高度，单位像素。留空 = 自动（按窗口高度预算和画布长宽比算，180–520px）;\n"
+  stageHField.title = "画布区（绘图区）的显示高度，单位像素。留空 = 自动：按画布长宽比铺满当前宽度（就是「和图上一样的比例」，140–2600px）;\n"
     + "填数字 = 固定成这个高度（140–2600px）。拉宽节点画布区变宽、拉长节点不会改它——高度只由这里决定。";
   stageHField.appendChild(el("span", "yx-rows-cap", "画布区高度"));
   const stageHInput = el("input", "yx-rows-input");
@@ -4118,15 +4118,16 @@ function setup(node) {
   // 列表能显示的最大高度 —— 只由两个显示行数决定，节点拉长拉短都不参与
   const listCap = () => listBaseline();
 
-  // 画布区高度（v1.0.3 之前的老算法，已按要求还原）：
-  // 只按「画布长宽比 + 窗口预算」算出一个固定值，不跟节点高度联动，拉长压短都不影响它。
-  // 例外：「只画框」那一行最右边的「画布区高度」填了数字，就按那个数字显示（留空 = 老算法）。
+  // 画布区高度：
+  //   填了数字 → 固定成这个高度（140–2600），不跟节点高度联动；
+  //   留空（自动）→ 直接按「图的大小」来：宽度铺满当前可用宽度，高度按画布长宽比算。
+  //   老算法是 min(自然高度, 窗口预算 0.34×innerHeight) 再夹到 180–520，等于把图塞进一条
+  //   矮框里（1376×1920 的图只显示 0.31 倍，还留一堆黑边），所以这里不再压预算。
   const stageHeight = () => {
     const fixed = Math.round(Number(state.stageH) || 0);
     if (fixed > 0) return Math.round(clamp(fixed, 140, 2600));
-    const budget = clamp(Math.round((window.innerHeight || 900) * 0.34), 220, 460);
     const natural = Math.round((layoutWidth() * S.height) / Math.max(1, S.width));
-    return Math.round(clamp(Math.min(natural, budget), 180, 520));
+    return Math.round(clamp(natural, 140, 2600));
   };
   // 兼容旧探针：老算法没有「基础 + 额外」两段
   const stageBaseHeight = () => stageHeight();
@@ -4211,7 +4212,7 @@ function setup(node) {
     state.stageH = value;
     input.value = value ? String(value) : "";
     node.properties = node.properties || {};
-    // 0 也要存下来：存过 0 才是「明确要自动」，没存过按默认 600
+    // 0 也要存下来：存过 0 才是「明确要自动（按图的比例铺满）」
     node.properties.yxStageH = value;
     layout();
     try {
@@ -6318,8 +6319,8 @@ function setup(node) {
       state.boxShowRows = readRows(node.properties?.yxBoxRows);
       if (state.bgRowsInput) state.bgRowsInput.value = String(state.bgShowRows);
       if (state.boxRowsInput) state.boxRowsInput.value = String(state.boxShowRows);
-      // 画布区高度：存过就回填；老工作流没存过按默认 600；存了 0 才是「自动」
-      state.stageH = clamp(Math.round(Number(node.properties?.yxStageH ?? 600) || 0), 0, 2600);
+      // 画布区高度：存过就回填；没存过按「自动（按图的比例铺满）」
+      state.stageH = clamp(Math.round(Number(node.properties?.yxStageH ?? 0) || 0), 0, 2600);
       if (state.stageHInput) {
         state.stageHInput.value = state.stageH ? String(state.stageH) : "";
       }
