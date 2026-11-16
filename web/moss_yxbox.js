@@ -4323,7 +4323,9 @@ function setup(node) {
     if (!domWidthReady()) {
       const retry = (state.fitRetry || 0) + 1;
       state.fitRetry = retry;
-      if (retry <= 40) requestAnimationFrame(fitNodeInitial);
+      // 节点不在可视区时前端不会挂载 DOM 控件，宽度会一直是 0 —— 用定时器等，
+      // 不要用 requestAnimationFrame（后台标签页还会被节流）。
+      if (retry <= 60) setTimeout(fitNodeInitial, 120);
       return;
     }
     state.fitRetry = 0;
@@ -4418,6 +4420,8 @@ function setup(node) {
         if (last && last[0] === width && last[1] === height) return;
         state.lastStageBox = [width, height];
         relayoutSoon();
+        // DOM 控件真正挂载 / 尺寸变化时再量一次：节点滚进可视区后自己把死白收掉
+        if (width > 0 && refitNode) setTimeout(refitNode, 0);
       });
       state.stageObserver.observe(stage);
     } catch (_error) {
